@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>키오스크 대화 AI PoC</title>
+<style>
+  :root { --bg:#F7F5EF; --ink:#1F2A37; --accent:#D9772B; --soft:#EDE8DB; --ok:#2B6CB0; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink); font-family:"Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif; }
+  #app { height:100%; display:flex; flex-direction:column; align-items:center; padding:24px 16px; gap:16px; max-width:720px; margin:0 auto; }
+  .face { width:min(44vh,320px); height:min(44vh,320px); }
+  .caption { font-size:clamp(26px,4.2vh,40px); line-height:1.4; text-align:center; font-weight:700; min-height:3em; }
+  .sub { font-size:clamp(18px,2.6vh,24px); color:#4A5568; text-align:center; min-height:1.6em; }
+  .state { font-size:18px; color:var(--accent); font-weight:700; letter-spacing:1px; }
+  .cart { width:100%; background:#fff; border:1px solid #DDD8CC; border-radius:16px; padding:16px 20px; font-size:clamp(18px,2.6vh,24px); display:none; }
+  .cart.show { display:block; }
+  .cart .row { display:flex; justify-content:space-between; padding:6px 0; }
+  .cart .total { border-top:1px solid #DDD8CC; margin-top:8px; padding-top:10px; font-weight:700; }
+  .card { width:100%; display:none; align-items:center; justify-content:center; gap:16px; background:var(--ink); color:#F7F5EF; border-radius:16px; padding:20px; font-size:22px; }
+  .card.show { display:flex; }
+  .slot { width:120px; height:14px; background:#0b1118; border-radius:4px; position:relative; overflow:visible; }
+  .slot::after { content:""; position:absolute; left:12px; top:-46px; width:96px; height:60px; background:var(--accent); border-radius:6px; animation:insert 1.6s ease-in-out infinite; }
+  @keyframes insert { 0%{top:-46px} 60%{top:-6px} 100%{top:-6px} }
+  .btns { display:flex; gap:12px; width:100%; }
+  button { flex:1; font-size:20px; padding:16px; border-radius:14px; border:2px solid var(--ink); background:#fff; color:var(--ink); font-weight:700; min-height:60px; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#1F2A37; }
+  button.listening { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .typed { display:flex; gap:8px; width:100%; }
+  .typed input { flex:1; font-size:18px; padding:12px; border-radius:12px; border:2px solid #DDD8CC; }
+  .foot { font-size:14px; color:#6A7179; text-align:center; }
+  .mouth { transform-origin:160px 215px; }
+  .talking .mouth { animation:talk 0.28s ease-in-out infinite alternate; }
+  @keyframes talk { from { transform:scaleY(0.25); } to { transform:scaleY(1.2); } }
+  .lid { transform-origin:center; animation:blink 4.5s infinite; }
+  @keyframes blink { 0%,96%,100% { transform:scaleY(1);} 98% { transform:scaleY(0.05);} }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="state" id="state">준비</div>
+  <svg class="face" id="face" viewBox="0 0 320 320" aria-label="화면 속 직원">
+    <circle cx="160" cy="160" r="150" fill="#F2D6BF"/>
+    <path d="M40 150 Q160 20 280 150 L280 120 Q160 10 40 120 Z" fill="#3B2A22"/>
+    <ellipse cx="115" cy="150" rx="16" ry="18" fill="#fff"/>
+    <ellipse cx="205" cy="150" rx="16" ry="18" fill="#fff"/>
+    <circle cx="117" cy="153" r="8" fill="#2A1E18"/>
+    <circle cx="207" cy="153" r="8" fill="#2A1E18"/>
+    <rect class="lid" x="95" y="130" width="42" height="40" fill="#F2D6BF" opacity="0" />
+    <path d="M95 128 Q115 118 137 128" stroke="#3B2A22" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <path d="M185 128 Q205 118 227 128" stroke="#3B2A22" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <path d="M160 165 Q152 190 165 192" stroke="#C9A58B" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <ellipse class="mouth" cx="160" cy="215" rx="34" ry="16" fill="#B5433B"/>
+    <circle cx="90" cy="200" r="14" fill="#F0B4A0" opacity="0.6"/>
+    <circle cx="230" cy="200" r="14" fill="#F0B4A0" opacity="0.6"/>
+  </svg>
+  <div class="caption" id="caption">안녕하세요.</div>
+  <div class="sub" id="sub"></div>
+  <div class="cart" id="cart"></div>
+  <div class="card" id="card"><div class="slot"></div><div>카드를 넣어 주세요</div></div>
+  <div class="btns">
+    <button id="btnMic" class="primary">말하기</button>
+    <button id="btnReset">처음으로</button>
+  </div>
+  <div class="typed"><input id="typed" placeholder="마이크가 없으면 여기에 말할 내용을 적고 Enter"><button id="btnSend" style="flex:0 0 auto">보내기</button></div>
+  <div class="foot">PoC V0 정적판 · 결제는 모의입니다 · 음성은 저장하지 않습니다</div>
+</div>
+
+<script>
+(() => {
+  const module = { exports: {} };
+  // 규칙 기반 주문 문장 해석 (의존성 없음). 서버와 테스트에서 같이 쓴다.
+// 입력: 전사 문자열 + 메뉴 → 출력: { items:[{id,name,temp,size,qty,price}], unmatched:[], reply }
+// 설계 메모: 1차는 규칙. LLM 매칭을 붙일지는 V0 결과로 정한다(orderless docs/spec/65 '서버 처리'와 같은 원칙).
+
+const KOREAN_NUM = {
+  '한': 1, '하나': 1, '한개': 1, '한잔': 1, '일': 1,
+  '두': 2, '둘': 2, '두개': 2, '두잔': 2, '이': 2,
+  '세': 3, '셋': 3, '세개': 3, '세잔': 3, '삼': 3,
+  '네개': 4, '네잔': 4, '넷': 4, '사': 4,
+  '다섯': 5, '오': 5, '여섯': 6, '일곱': 7, '여덟': 8, '아홉': 9, '열': 10,
+};
+
+function norm(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[.,!?~…]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// "아메리카노 아이스 큰 거 하나랑 라떼 두 잔" → ["아메리카노 아이스 큰 거 하나", "라떼 두 잔"]
+function splitClauses(text) {
+  return text
+    .split(/\s*(?:랑|하고|그리고|이랑|과|와|또|,|\+)\s+|\s+(?:랑|하고|그리고|이랑)\s*/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
+function findQty(clause) {
+  const m = clause.match(/(\d+)\s*(개|잔|병|조각)?/);
+  if (m) return Math.max(1, Math.min(20, parseInt(m[1], 10)));
+  // 한 개 / 한잔 / 두 잔 / 하나
+  const m2 = clause.match(/(한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(개|잔|병|조각)/);
+  if (m2) return KOREAN_NUM[m2[1]] || 1;
+  const m3 = clause.match(/(하나|둘|셋|넷)(?:만|요|\s|$)/);
+  if (m3) return KOREAN_NUM[m3[1]] || 1;
+  return 1;
+}
+
+function findWord(clause, table) {
+  // 긴 별칭부터 맞춰야 "큰 사이즈"가 "큰"보다 먼저 잡힌다
+  let best = null;
+  for (const [key, words] of Object.entries(table)) {
+    for (const w of words) {
+      if (clause.includes(w) && (!best || w.length > best.len)) best = { key, len: w.length };
+    }
+  }
+  return best ? best.key : null;
+}
+
+function findItem(clause, menu) {
+  let best = null;
+  for (const item of menu.items) {
+    for (const a of item.aliases) {
+      const i = clause.indexOf(a);
+      if (i >= 0 && (!best || a.length > best.len)) best = { item, len: a.length };
+    }
+  }
+  return best ? best.item : null;
+}
+
+function parseOrder(text, menu) {
+  const t = norm(text);
+  const items = [];
+  const unmatched = [];
+  for (const clause of splitClauses(t)) {
+    const item = findItem(clause, menu);
+    if (!item) { unmatched.push(clause); continue; }
+    const sizes = Object.keys(item.sizes);
+    let size = findWord(clause, menu.sizeWords);
+    if (!size || !sizes.includes(size)) size = sizes.includes('M') ? 'M' : sizes[0];
+    let temp = item.temps.length ? findWord(clause, menu.tempWords) : null;
+    if (item.temps.length && (!temp || !item.temps.includes(temp))) temp = item.temps[0];
+    const qty = findQty(clause);
+    items.push({ id: item.id, name: item.name, temp, size, qty, price: item.sizes[size] * qty });
+  }
+  return { items, unmatched };
+}
+
+function describe(it) {
+  const temp = it.temp === 'ICE' ? '아이스' : it.temp === 'HOT' ? '따뜻한' : '';
+  const size = it.size === 'L' ? '큰 거' : it.size === 'S' ? '작은 거' : it.size === 'M' ? '보통 크기' : '';
+  return [temp, it.name, size, `${it.qty}개`].filter(Boolean).join(' ');
+}
+
+function total(items) { return items.reduce((s, it) => s + it.price, 0); }
+
+function won(n) { return n.toLocaleString('ko-KR') + '원'; }
+
+function isYes(text, menu) {
+  const t = norm(text);
+  if (menu.noWords.some((w) => t.includes(w))) return false;
+  if (menu.yesWords.some((w) => t === w || t.startsWith(w) || t.includes(w))) return true;
+  return null; // 모름
+}
+
+module.exports = { parseOrder, describe, total, won, isYes, norm };
+
+  const { parseOrder, describe, total, won, isYes } = module.exports;
+  const menu = {
+  "store": "데모 카페",
+  "currency": "원",
+  "items": [
+    { "id": "americano", "name": "아메리카노", "aliases": ["아메리카노", "아메리카", "아아", "뜨아", "아메"], "temps": ["ICE", "HOT"], "sizes": { "S": 3500, "M": 4000, "L": 4500 } },
+    { "id": "latte", "name": "카페라떼", "aliases": ["카페라떼", "라떼", "라테", "카페라테", "아이스라떼"], "temps": ["ICE", "HOT"], "sizes": { "S": 4000, "M": 4500, "L": 5000 } },
+    { "id": "vanilla", "name": "바닐라라떼", "aliases": ["바닐라라떼", "바닐라", "바닐라라테"], "temps": ["ICE", "HOT"], "sizes": { "S": 4500, "M": 5000, "L": 5500 } },
+    { "id": "yuja", "name": "유자차", "aliases": ["유자차", "유자"], "temps": ["ICE", "HOT"], "sizes": { "S": 4000, "M": 4500, "L": 5000 } },
+    { "id": "green", "name": "녹차", "aliases": ["녹차", "그린티"], "temps": ["ICE", "HOT"], "sizes": { "S": 3500, "M": 4000, "L": 4500 } },
+    { "id": "misu", "name": "미숫가루", "aliases": ["미숫가루", "미수가루", "미숫"], "temps": ["ICE"], "sizes": { "S": 4000, "M": 4500, "L": 5000 } },
+    { "id": "ade", "name": "레몬에이드", "aliases": ["레몬에이드", "에이드", "레모네이드"], "temps": ["ICE"], "sizes": { "S": 4500, "M": 5000, "L": 5500 } },
+    { "id": "cookie", "name": "쿠키", "aliases": ["쿠키", "과자"], "temps": [], "sizes": { "ONE": 2500 } },
+    { "id": "croissant", "name": "크루아상", "aliases": ["크루아상", "크로와상", "빵"], "temps": [], "sizes": { "ONE": 3500 } }
+  ],
+  "sizeWords": {
+    "L": ["큰", "큰거", "큰 거", "라지", "엘", "제일 큰", "가장 큰", "큰사이즈", "큰 사이즈", "벤티", "그란데"],
+    "M": ["중간", "보통", "미디엄", "톨", "레귤러", "중"],
+    "S": ["작은", "작은거", "작은 거", "스몰", "제일 작은", "가장 작은", "작은사이즈", "숏"]
+  },
+  "tempWords": {
+    "ICE": ["아이스", "차가운", "차갑게", "시원한", "시원하게", "얼음", "찬거", "찬 거", "아이스로"],
+    "HOT": ["따뜻한", "따뜻하게", "뜨거운", "뜨겁게", "핫", "따듯한", "따듯하게", "뜨아", "따뜻한거", "따뜻한 거"]
+  },
+  "yesWords": ["네", "예", "응", "맞아", "맞아요", "맞습니다", "그래", "그래요", "좋아", "좋아요", "오케이", "맞죠", "맞지", "넵", "어", "됐어", "됐어요", "해줘", "주세요", "결제"],
+  "noWords": ["아니", "아니요", "아뇨", "틀려", "틀렸어", "다시", "취소", "잘못", "말고", "바꿔", "안", "노"]
+}
+;
+  const key = 'kiosk-poc-stats';
+  const load = () => { try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; } };
+  const save = (o) => { try { localStorage.setItem(key, JSON.stringify(o)); } catch {} };
+  const sess = (id) => { const o = load(); o[id] = o[id] || { startedAt: Date.now(), turns: 0, parseTries: 0, firstTryOk: null, confirmed: false, paid: false }; return [o, o[id]]; };
+  let seq = Number(localStorage.getItem('kiosk-poc-seq') || 100);
+  window.__localApi = async (p, body) => {
+    const [o, s] = sess(body.sessionId || 'anon');
+    if (p === '/api/parse') {
+      s.turns += 1;
+      if (body.mode === 'confirm') { save(o); return { yes: isYes(body.text, menu) }; }
+      s.parseTries += 1;
+      const r = parseOrder(body.text, menu);
+      if (!r.items.length) { if (s.firstTryOk === null) s.firstTryOk = false; save(o); return { items: [], reply: '잘 못 들었어요. 메뉴 이름을 말씀해 주세요. 예를 들면 "아메리카노 아이스 큰 거 하나요".' }; }
+      if (s.firstTryOk === null) s.firstTryOk = true; save(o);
+      const sum = total(r.items);
+      return { items: r.items, total: sum, reply: r.items.map(describe).join(', ') + ', 모두 ' + won(sum) + ' 맞으실까요?', unmatched: r.unmatched };
+    }
+    if (p === '/api/pay') {
+      await new Promise((r) => setTimeout(r, 1500));
+      s.paid = true; s.endedAt = Date.now(); save(o);
+      seq += 1; localStorage.setItem('kiosk-poc-seq', String(seq));
+      const sum = total(body.items || []);
+      return { ok: true, orderNo: seq, amount: sum, reply: '결제됐어요. 주문번호 ' + seq + '번이에요. 잠시만 기다려 주세요.' };
+    }
+    if (p === '/api/event') { if (body.name === 'confirmed') s.confirmed = true; if (body.name === 'abandoned') { s.abandoned = true; s.endedAt = Date.now(); } save(o); return { ok: true }; }
+    return {};
+  };
+  // 주소 뒤에 ?stats 를 붙이면 측정값을 보여 준다
+  if (location.search.includes('stats')) {
+    const all = Object.values(load()); const n = all.length; const paid = all.filter((s) => s.paid).length;
+    const tried = all.filter((s) => s.firstTryOk !== null).length; const ft = all.filter((s) => s.firstTryOk === true).length;
+    const durs = all.filter((s) => s.paid && s.endedAt).map((s) => (s.endedAt - s.startedAt) / 1000).sort((a, b) => a - b);
+    const p50 = durs.length ? durs[Math.floor(durs.length / 2)] : null;
+    document.addEventListener('DOMContentLoaded', () => { const d = document.createElement('pre'); d.style.cssText = 'position:fixed;left:8px;top:8px;background:#fff;padding:8px;border:1px solid #ccc;font-size:12px;z-index:9'; d.textContent = JSON.stringify({ sessions: n, paid, paidRate: n ? paid / n : null, firstTryRate: tried ? ft / tried : null, secondsToPayP50: p50 }, null, 1); document.body.appendChild(d); });
+  }
+})();
+</script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const sessionId = 's_' + Math.random().toString(36).slice(2, 10);
+  let state = 'IDLE';
+  let cart = [];
+  let rec = null;
+  let listening = false;
+  let timer = null;
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const canListen = !!SR;
+
+  function setState(s, label) { state = s; $('state').textContent = label || s; }
+  function say(text, sub) {
+    $('caption').textContent = text;
+    $('sub').textContent = sub || '';
+    return new Promise((resolve) => {
+      if (!('speechSynthesis' in window)) return resolve();
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'ko-KR'; u.rate = 0.92;
+      const v = speechSynthesis.getVoices().find((x) => x.lang && x.lang.startsWith('ko'));
+      if (v) u.voice = v;
+      $('face').classList.add('talking');
+      u.onend = () => { $('face').classList.remove('talking'); resolve(); };
+      u.onerror = () => { $('face').classList.remove('talking'); resolve(); };
+      speechSynthesis.speak(u);
+    });
+  }
+  async function post(path, body) {
+    // 정적 배포(GitHub Pages)에서는 서버 없이 window.__localApi가 같은 일을 한다(build-static.js)
+    if (window.__localApi) return window.__localApi(path, { sessionId, ...body });
+    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId, ...body }) });
+    return r.json();
+  }
+  function renderCart() {
+    const el = $('cart');
+    if (!cart.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+    const won = (n) => n.toLocaleString('ko-KR') + '원';
+    const rows = cart.map((it) => `<div class="row"><span>${[it.temp === 'ICE' ? '아이스' : it.temp === 'HOT' ? '따뜻한' : '', it.name, it.size === 'L' ? '큰 거' : it.size === 'S' ? '작은 거' : it.size === 'M' ? '보통' : '', it.qty + '개'].filter(Boolean).join(' ')}</span><span>${won(it.price)}</span></div>`).join('');
+    const sum = cart.reduce((a, b) => a + b.price, 0);
+    el.innerHTML = rows + `<div class="row total"><span>합계</span><span>${won(sum)}</span></div>`;
+    el.classList.add('show');
+  }
+
+  function listen(onText) {
+    if (!canListen) { $('sub').textContent = '이 브라우저는 음성 인식이 안 됩니다. 아래에 적어 주세요.'; return; }
+    stopListen();
+    rec = new SR();
+    rec.lang = 'ko-KR'; rec.interimResults = true; rec.maxAlternatives = 1; rec.continuous = false;
+    let finalText = '';
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t; else interim += t;
+      }
+      $('sub').textContent = '듣는 중: ' + (finalText || interim);
+    };
+    rec.onend = () => {
+      listening = false; $('btnMic').classList.remove('listening'); $('btnMic').textContent = '말하기';
+      if (finalText.trim()) onText(finalText.trim());
+      else if (state === 'LISTEN' || state === 'CONFIRM') { $('sub').textContent = '잘 안 들렸어요. [말하기]를 누르고 다시 말씀해 주세요.'; }
+    };
+    rec.onerror = () => { listening = false; $('btnMic').classList.remove('listening'); $('btnMic').textContent = '말하기'; };
+    listening = true; $('btnMic').classList.add('listening'); $('btnMic').textContent = '듣는 중…';
+    try { rec.start(); } catch (_) {}
+  }
+  function stopListen() { if (rec) { try { rec.onend = null; rec.stop(); } catch (_) {} rec = null; } listening = false; $('btnMic').classList.remove('listening'); $('btnMic').textContent = '말하기'; }
+
+  async function start() {
+    clearTimeout(timer); stopListen(); cart = []; renderCart(); $('card').classList.remove('show');
+    setState('IDLE', '주문 받는 중');
+    await say('어서 오세요. 어떤 거 주문하실래요?', '예: "아메리카노 아이스 큰 거 하나요"');
+    setState('LISTEN', '듣는 중');
+    listen(handleOrder);
+  }
+  async function handleOrder(text) {
+    setState('THINK', '확인 중');
+    const r = await post('/api/parse', { text, mode: 'order' });
+    if (!r.items || !r.items.length) {
+      await say(r.reply, '들은 말: ' + text);
+      setState('LISTEN', '듣는 중'); listen(handleOrder); return;
+    }
+    cart = r.items; renderCart();
+    setState('CONFIRM', '맞는지 확인');
+    await say(r.reply, '맞으면 "네", 아니면 "아니요"라고 말씀해 주세요');
+    listen(handleConfirm);
+  }
+  async function handleConfirm(text) {
+    const r = await post('/api/parse', { text, mode: 'confirm' });
+    if (r.yes === true) {
+      await post('/api/event', { name: 'confirmed' });
+      return pay();
+    }
+    if (r.yes === false) {
+      cart = []; renderCart();
+      await say('알겠어요. 다시 말씀해 주세요. 어떤 거 드릴까요?', '');
+      setState('LISTEN', '듣는 중'); listen(handleOrder); return;
+    }
+    await say('맞으면 "네", 아니면 "아니요"라고 말씀해 주세요.', '들은 말: ' + text);
+    listen(handleConfirm);
+  }
+  async function pay() {
+    setState('PAY', '결제');
+    $('card').classList.add('show');
+    await say('네. 단말기에 카드를 넣어 주세요.', '카드를 넣으면 바로 결제돼요');
+    const r = await post('/api/pay', { items: cart });
+    $('card').classList.remove('show');
+    setState('DONE', '완료');
+    await say(r.reply, `총 ${r.amount.toLocaleString('ko-KR')}원 · 주문번호 ${r.orderNo}`);
+    timer = setTimeout(start, 6000);
+  }
+
+  $('btnMic').onclick = () => {
+    if (listening) { stopListen(); return; }
+    if (state === 'CONFIRM') listen(handleConfirm);
+    else if (state === 'LISTEN' || state === 'IDLE') { setState('LISTEN', '듣는 중'); listen(handleOrder); }
+  };
+  $('btnReset').onclick = () => { post('/api/event', { name: 'abandoned' }); start(); };
+  const sendTyped = () => {
+    const t = $('typed').value.trim(); if (!t) return; $('typed').value = '';
+    stopListen();
+    if (state === 'CONFIRM') handleConfirm(t); else handleOrder(t);
+  };
+  $('btnSend').onclick = sendTyped;
+  $('typed').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendTyped(); });
+
+  // 브라우저 정책상 첫 소리는 사용자 동작 뒤에 난다 → 첫 화면은 터치로 시작
+  $('caption').textContent = '화면을 눌러 시작하세요';
+  $('sub').textContent = canListen ? '마이크 허용을 눌러 주세요' : '이 브라우저는 음성 인식이 안 됩니다(Chrome 권장). 타이핑으로 시험할 수 있어요.';
+  const kick = () => { document.removeEventListener('click', kick); if (state === 'IDLE') start(); };
+  document.addEventListener('click', kick);
+  if ('speechSynthesis' in window) speechSynthesis.getVoices();
+})();
+</script>
+</body>
+</html>
