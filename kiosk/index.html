@@ -68,7 +68,7 @@
 
 <script>
 (() => {
-  const module = { exports: {} };
+  const parseMod = (() => { const module = { exports: {} };
   // 규칙 기반 주문 문장 해석 (의존성 없음). 서버와 테스트에서 같이 쓴다.
 // 입력: 전사 문자열 + 메뉴 → 출력: { items:[{id,name,temp,size,qty,price}], unmatched:[], reply }
 // 설계 메모: 1차는 규칙. LLM 매칭을 붙일지는 V0 결과로 정한다(orderless docs/spec/65 '서버 처리'와 같은 원칙).
@@ -167,7 +167,8 @@ function isYes(text, menu) {
 
 module.exports = { parseOrder, describe, total, won, isYes, norm };
 
-  const { parseOrder, describe, total, won, isYes } = module.exports;
+  return module.exports; })();
+  const { parseOrder, describe, total, won, isYes } = parseMod;
   const menu = {
   "store": "데모 카페",
   "currency": "원",
