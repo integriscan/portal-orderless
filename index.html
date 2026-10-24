@@ -148,7 +148,7 @@
   var API = "https://hcsoctvuzjwgvxfcrwtb.supabase.co/functions/v1/portal";
   // 주소의 맨 앞 이름으로 프로젝트를 고른다(orderless.…, team1.…). 미리보기에서는 ?p=team1.
   // admin은 분석 화면을 여는 사람을 부르는 말. 학교 프로젝트에서는 "대표"라고 하지 않는다.
-  var PROJECTS = { orderless: { key: "orderless", name: "오더리스", admin: "대표" }, team1: { key: "team1", name: "남뀨", admin: "관리자" } };
+  var PROJECTS = { orderless: { key: "orderless", name: "해산물", admin: "관리자" }, team1: { key: "team1", name: "남뀨", admin: "관리자" } };
   var sub = location.hostname.split(".")[0];
   var project = PROJECTS[sub] || PROJECTS[new URLSearchParams(location.search).get("p")] || PROJECTS.orderless;
 
